@@ -1,37 +1,40 @@
-from google import genai
+from fastapi import FastAPI, File, UploadFile, Form
+from fastapi.middleware.cors import CORSMiddleware
 from models import SentimentAnalysis
-import PIL.Image
-import json
+from ai_service import flag_social
+import tempfile
+import os
 
-# Initialize the client
-client = genai.Client(api_key="")
+app = FastAPI()
 
-def flag_social(text="", image_path=None):
+# Allow all origins
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-    # Initialize contents with the system prompt and text
-    contents = [
-        "You are a content moderator in a social media platform. Your task is to analyse the content uploaded in the user's post and flag them based on tag, category & description of it : ",
-        text
-    ]
+@app.post("/analyse/social", response_model=SentimentAnalysis)
+async def analyse_content(text: str = Form(...), image: UploadFile = File(None)):
+    try:
+        # Handle the image if it exists
+        image_path = None
+        if image:
+            # Create temporary file to store the uploaded image
+            with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(image.filename)[1]) as temp_file:
+                temp_file.write(await image.read())
+                image_path = temp_file.name
 
-    # Check if image exists and add it to contents if it does
-    if image_path:
-        try:
-            image = PIL.Image.open(image_path)
-            contents.append(image)
-        except Exception as e:
-            print(f"Error loading image: {e}")
+        # Process the content
+        result = flag_social(text=text, image_path=image_path)
 
-    # Generate content with the prepared contents
-    response = client.models.generate_content(
-        model="gemini-2.0-flash",
-        contents=contents,
-        config={
-            'response_mime_type': 'application/json',
-            'response_schema': SentimentAnalysis
-        }
-    )
-    result_dict = json.loads(response.text)
-    return result_dict
+        # Clean up temporary file if it was created
+        if image_path:
+            os.unlink(image_path)
 
-print(flag_social(text="I like holi",image_path="holi.jpeg"))
+        return result
+    
+    except Exception as e:
+        return {"error": str(e)}
